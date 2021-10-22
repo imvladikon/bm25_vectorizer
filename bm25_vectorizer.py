@@ -13,6 +13,12 @@ from sklearn.preprocessing import normalize
 from sklearn.utils.fixes import _astype_copy_false
 from sklearn.utils.validation import FLOAT_DTYPES, check_is_fitted
 
+"""
+http://www.cs.otago.ac.nz/homepages/andrew/papers/2014-2.pdf
+Improvements to BM25 and Language Models Examined, Trotman et al.
+https://nlp.stanford.edu/IR-book/html/htmledition/okapi-bm25-a-non-binary-model-1.html
+"""
+
 
 class BM25Transformer(TransformerMixin, BaseEstimator):
     def __init__(
@@ -334,7 +340,6 @@ class BM25PlusTransformer(BM25Transformer):
             # Scalar value
             avgdl = np.average(dl)
             # Compute BM25 score only for non-zero elements
-            ctd = X.data / (1 - self.b + self.b * rep / avgdl)
             data = (
                 X.data
                 * (self.k1 + 1)
