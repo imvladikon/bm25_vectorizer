@@ -15,18 +15,6 @@ from sklearn.utils.validation import FLOAT_DTYPES, check_is_fitted
 
 
 class BM25Transformer(TransformerMixin, BaseEstimator):
-    """
-    Parameters
-    ----------
-    use_idf : boolean, optional (default=True)
-    k1 : float, optional (default=2.0)
-    b : float, optional (default=0.75)
-    References
-    ----------
-    Okapi BM25: a non-binary model - Introduction to Information Retrieval
-    http://nlp.stanford.edu/IR-book/html/htmledition/okapi-bm25-a-non-binary-model-1.html
-    """
-
     def __init__(
         self,
         *,
@@ -36,6 +24,7 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
         sublinear_tf=False,
         k1=2.0,
         b=0.75,
+        delta=2.0
     ):
 
         self.norm = norm
@@ -44,6 +33,7 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
         self.sublinear_tf = sublinear_tf
         self.k1 = k1
         self.b = b
+        self.delta = delta
 
     def fit(self, X, y=None):
         if not sp.issparse(X):
@@ -61,7 +51,9 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
 
             # log+1 instead of log makes sure terms with zero idf don't get
             # suppressed entirely.
-            idf = np.log((n_samples - df + 0.5) / (df + 0.5))
+            idf = self.get_idf(document_frequency=df, n_samples=n_samples)
+            # TODO: collect words with negative idf to set them a special epsilon value.
+            # idf can be negative if word is contained in more than half of documents
             self._idf_diag = sp.diags(
                 idf,
                 offsets=0,
@@ -71,6 +63,11 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
             )
 
         return self
+
+    def get_idf(self, document_frequency, n_samples):
+        return np.log(n_samples - document_frequency + 0.5) - np.log(
+            document_frequency + 0.5
+        )
 
     def transform(self, X, copy=True):
         X = self._validate_data(
@@ -146,6 +143,112 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
         return {"X_types": ["2darray", "sparse"]}
 
 
+class BM25LTransformer(BM25Transformer):
+    def __init__(
+        self,
+        *,
+        norm="l2",
+        use_idf=True,
+        smooth_idf=True,
+        sublinear_tf=False,
+        k1=2.0,
+        b=0.75,
+        delta=2.0
+    ):
+
+        super().__init__(
+            norm=norm,
+            use_idf=use_idf,
+            smooth_idf=smooth_idf,
+            sublinear_tf=sublinear_tf,
+            k1=k1,
+            b=b,
+            delta=delta,
+        )
+
+    def fit(self, X, y=None):
+        if not sp.issparse(X):
+            X = sp.csr_matrix(X)
+        dtype = X.dtype if X.dtype in FLOAT_DTYPES else np.float64
+
+        if self.use_idf:
+            n_samples, n_features = X.shape
+            df = _document_frequency(X)
+            df = df.astype(dtype, **_astype_copy_false(df))
+
+            # perform idf smoothing if required
+            df += int(self.smooth_idf)
+            n_samples += int(self.smooth_idf)
+
+            # log+1 instead of log makes sure terms with zero idf don't get
+            # suppressed entirely.
+            idf = self.get_idf(document_frequency=df, n_samples=n_samples)
+            # TODO: collect words with negative idf to set them a special epsilon value.
+            # idf can be negative if word is contained in more than half of documents
+            self._idf_diag = sp.diags(
+                idf,
+                offsets=0,
+                shape=(n_features, n_features),
+                format="csr",
+                dtype=dtype,
+            )
+
+        return self
+
+    def get_idf(self, document_frequency, n_samples):
+
+        return np.log(n_samples + 1) - np.log(document_frequency + 0.5)
+
+    def transform(self, X, copy=True):
+        X = self._validate_data(
+            X, accept_sparse="csr", dtype=FLOAT_DTYPES, copy=copy, reset=False
+        )
+        if not sp.issparse(X):
+            X = sp.csr_matrix(X, dtype=np.float64)
+
+        if self.sublinear_tf:
+            np.log(X.data, X.data)
+            X.data += 1
+
+            # Document length (number of terms) in each row
+            # Shape is (n_samples, 1)
+            dl = X.sum(axis=1)
+            # Number of non-zero elements in each row
+            # Shape is (n_samples, )
+            sz = X.indptr[1:] - X.indptr[0:-1]
+            # In each row, repeat `dl` for `sz` times
+            # Shape is (sum(sz), )
+            # Example
+            # -------
+            # dl = [4, 5, 6]
+            # sz = [1, 2, 3]
+            # rep = [4, 5, 5, 6, 6, 6]
+            rep = np.repeat(np.asarray(dl), sz)
+            # Average document length
+            # Scalar value
+            avgdl = np.average(dl)
+            # Compute BM25 score only for non-zero elements
+            ctd = X.data / (1 - self.b + self.b * rep / avgdl)
+            data = (
+                X.data * (self.k1 + 1) * (ctd + self.delta) / (self.k1 + ctd + self.delta)
+            )
+            X = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
+
+        if self.use_idf:
+            # idf_ being a property, the automatic attributes detection
+            # does not work as usual and we need to specify the attribute
+            # name:
+            check_is_fitted(self, attributes=["idf_"], msg="idf vector is not fitted")
+
+            # *= doesn't work
+            X = X * self._idf_diag
+
+        if self.norm:
+            X = normalize(X, norm=self.norm, copy=False)
+
+        return X
+
+
 class BM25Vectorizer(TfidfVectorizer):
     def __init__(
         self,
@@ -171,6 +274,10 @@ class BM25Vectorizer(TfidfVectorizer):
         use_idf=True,
         smooth_idf=True,
         sublinear_tf=False,
+        transformer="bm25",
+        k1=2.0,
+        b=0.75,
+        delta=0.5
     ):
         super().__init__(
             input=input,
@@ -192,8 +299,16 @@ class BM25Vectorizer(TfidfVectorizer):
             dtype=dtype,
         )
 
-        self._tfidf = BM25Transformer(
-            norm=norm, use_idf=use_idf, smooth_idf=smooth_idf, sublinear_tf=sublinear_tf
+        transformer_dispatch = {"bm25": BM25Transformer, "bm25l": BM25LTransformer}
+
+        self._tfidf = transformer_dispatch.get(transformer, BM25Transformer)(
+            norm=norm,
+            use_idf=use_idf,
+            smooth_idf=smooth_idf,
+            sublinear_tf=sublinear_tf,
+            k1=k1,
+            b=b,
+            delta=delta,
         )
 
 
@@ -207,4 +322,9 @@ if __name__ == '__main__':
     vectorizer = BM25Vectorizer()
     X = vectorizer.fit_transform(corpus)
     print(vectorizer.get_feature_names_out())
-    print(X.shape)
+    print(X.data)
+
+    vectorizer = BM25Vectorizer(transformer="bm25l")
+    X = vectorizer.fit_transform(corpus)
+    print(vectorizer.get_feature_names_out())
+    print(X.data)
