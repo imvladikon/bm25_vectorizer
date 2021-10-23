@@ -28,7 +28,7 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
         use_idf=True,
         smooth_idf=True,
         sublinear_tf=False,
-        k1=2.0,
+        k1=1.2,
         b=0.75,
         delta=2.0
     ):
@@ -40,6 +40,7 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
         self.k1 = k1
         self.b = b
         self.delta = delta
+        self.avgdl = 0
 
     def fit(self, X, y=None):
         if not sp.issparse(X):
@@ -50,6 +51,7 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
             n_samples, n_features = X.shape
             df = _document_frequency(X)
             df = df.astype(dtype, **_astype_copy_false(df))
+            self.avgdl = self._calc_average_doc_length(X)
 
             # perform idf smoothing if required
             df += int(self.smooth_idf)
@@ -57,7 +59,7 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
 
             # log+1 instead of log makes sure terms with zero idf don't get
             # suppressed entirely.
-            idf = self.get_idf(document_frequency=df, n_samples=n_samples)
+            idf = self._calc_idf(document_frequency=df, n_samples=n_samples)
             # TODO: collect words with negative idf to set them a special epsilon value.
             # idf can be negative if word is contained in more than half of documents
             self._idf_diag = sp.diags(
@@ -70,10 +72,15 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
 
         return self
 
-    def get_idf(self, document_frequency, n_samples):
+    def _calc_idf(self, document_frequency, n_samples):
         return np.log(n_samples - document_frequency + 0.5) - np.log(
             document_frequency + 0.5
         )
+
+    def _calc_average_doc_length(self, X):
+        dl = X.sum(axis=1)
+        avgdl = np.average(dl)
+        return avgdl
 
     def transform(self, X, copy=True):
         X = self._validate_data(
@@ -128,6 +135,7 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
     @property
     def idf_(self):
         """Inverse document frequency vector, only defined if `use_idf=True`.
+        #TODO: assert use_idf
 
         Returns
         -------
@@ -172,36 +180,7 @@ class BM25LTransformer(BM25Transformer):
             delta=delta,
         )
 
-    def fit(self, X, y=None):
-        if not sp.issparse(X):
-            X = sp.csr_matrix(X)
-        dtype = X.dtype if X.dtype in FLOAT_DTYPES else np.float64
-
-        if self.use_idf:
-            n_samples, n_features = X.shape
-            df = _document_frequency(X)
-            df = df.astype(dtype, **_astype_copy_false(df))
-
-            # perform idf smoothing if required
-            df += int(self.smooth_idf)
-            n_samples += int(self.smooth_idf)
-
-            # log+1 instead of log makes sure terms with zero idf don't get
-            # suppressed entirely.
-            idf = self.get_idf(document_frequency=df, n_samples=n_samples)
-            # TODO: collect words with negative idf to set them a special epsilon value.
-            # idf can be negative if word is contained in more than half of documents
-            self._idf_diag = sp.diags(
-                idf,
-                offsets=0,
-                shape=(n_features, n_features),
-                format="csr",
-                dtype=dtype,
-            )
-
-        return self
-
-    def get_idf(self, document_frequency, n_samples):
+    def _calc_idf(self, document_frequency, n_samples):
 
         return np.log(n_samples + 1) - np.log(document_frequency + 0.5)
 
@@ -278,36 +257,7 @@ class BM25PlusTransformer(BM25Transformer):
             delta=delta,
         )
 
-    def fit(self, X, y=None):
-        if not sp.issparse(X):
-            X = sp.csr_matrix(X)
-        dtype = X.dtype if X.dtype in FLOAT_DTYPES else np.float64
-
-        if self.use_idf:
-            n_samples, n_features = X.shape
-            df = _document_frequency(X)
-            df = df.astype(dtype, **_astype_copy_false(df))
-
-            # perform idf smoothing if required
-            df += int(self.smooth_idf)
-            n_samples += int(self.smooth_idf)
-
-            # log+1 instead of log makes sure terms with zero idf don't get
-            # suppressed entirely.
-            idf = self.get_idf(document_frequency=df, n_samples=n_samples)
-            # TODO: collect words with negative idf to set them a special epsilon value.
-            # idf can be negative if word is contained in more than half of documents
-            self._idf_diag = sp.diags(
-                idf,
-                offsets=0,
-                shape=(n_features, n_features),
-                format="csr",
-                dtype=dtype,
-            )
-
-        return self
-
-    def get_idf(self, document_frequency, n_samples):
+    def _calc_idf(self, document_frequency, n_samples):
 
         return np.log(n_samples + 1) - np.log(document_frequency)
 
@@ -429,6 +379,11 @@ class BM25Vectorizer(TfidfVectorizer):
             b=b,
             delta=delta,
         )
+
+    def get_idf(self, return_dict=True):
+        if return_dict:
+            return dict(zip(self.get_feature_names(), self.idf_))
+        return self.idf_
 
 
 if __name__ == '__main__':
