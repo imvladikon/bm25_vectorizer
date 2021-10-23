@@ -393,6 +393,11 @@ if __name__ == '__main__':
         'And this is the third one.',
         'Is this the first document?',
     ]
+    vectorizer = TfidfVectorizer()
+    X = vectorizer.fit_transform(corpus)
+    print(vectorizer.get_feature_names_out())
+    print(X.data)
+
     vectorizer = BM25Vectorizer()
     X = vectorizer.fit_transform(corpus)
     print(vectorizer.get_feature_names_out())
