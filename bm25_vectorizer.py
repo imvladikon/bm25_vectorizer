@@ -19,6 +19,35 @@ Improvements to BM25 and Language Models Examined, Trotman et al.
 https://nlp.stanford.edu/IR-book/html/htmledition/okapi-bm25-a-non-binary-model-1.html
 """
 
+"""
+for the sklearn version compatibility
+"""
+try:
+    TfidfVectorizer.get_feature_names_out
+except:
+    TfidfVectorizer.get_feature_names_out = TfidfVectorizer.get_feature_names
+
+
+def _validate_data(
+    self,
+    X="no_validation",
+    y="no_validation",
+    reset=True,
+    validate_separately=False,
+    **check_params,
+):
+    from sklearn.utils.validation import check_array
+
+    X = check_array(X, accept_sparse=('csr', 'csc'))
+    return X
+
+
+try:
+    BaseEstimator._validate_data
+
+except:
+    BaseEstimator._validate_data = _validate_data
+
 
 class BM25Transformer(TransformerMixin, BaseEstimator):
     def __init__(
@@ -30,7 +59,7 @@ class BM25Transformer(TransformerMixin, BaseEstimator):
         sublinear_tf=False,
         k1=1.2,
         b=0.75,
-        delta=2.0
+        delta=2.0,
     ):
 
         self.norm = norm
@@ -167,7 +196,7 @@ class BM25LTransformer(BM25Transformer):
         sublinear_tf=False,
         k1=2.0,
         b=0.75,
-        delta=2.0
+        delta=2.0,
     ):
 
         super().__init__(
@@ -244,7 +273,7 @@ class BM25PlusTransformer(BM25Transformer):
         sublinear_tf=False,
         k1=2.0,
         b=0.75,
-        delta=2.0
+        delta=2.0,
     ):
 
         super().__init__(
@@ -342,7 +371,7 @@ class BM25Vectorizer(TfidfVectorizer):
         transformer="bm25",
         k1=2.0,
         b=0.75,
-        delta=0.5
+        delta=0.5,
     ):
         super().__init__(
             input=input,
@@ -382,7 +411,7 @@ class BM25Vectorizer(TfidfVectorizer):
 
     def get_idf(self, return_dict=True):
         if return_dict:
-            return dict(zip(self.get_feature_names(), self.idf_))
+            return dict(zip(self.get_feature_names_out(), self.idf_))
         return self.idf_
 
 
