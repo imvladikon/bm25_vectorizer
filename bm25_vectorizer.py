@@ -10,7 +10,6 @@ from sklearn.feature_extraction.text import (
     _document_frequency,
 )
 from sklearn.preprocessing import normalize
-from sklearn.utils.fixes import _astype_copy_false
 from sklearn.utils.validation import FLOAT_DTYPES, check_is_fitted
 
 """
@@ -27,6 +26,19 @@ try:
 except:
     TfidfVectorizer.get_feature_names_out = TfidfVectorizer.get_feature_names
 
+
+def _astype_copy_false(X):
+    """
+    borrowed from old sklearn: from sklearn.utils.fixes import _astype_copy_false
+    Returns the copy=False parameter for
+    {ndarray, csr_matrix, csc_matrix}.astype when possible,
+    otherwise don't specify
+    """
+    if sp_version >= parse_version('1.1') or not sp.issparse(X):
+        return {'copy': False}
+    else:
+        return {}
+        
 
 def _validate_data(
     self,
