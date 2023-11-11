@@ -404,6 +404,11 @@ class BM25Vectorizer(TfidfVectorizer):
             binary=binary,
             dtype=dtype,
         )
+        # avoid raising in sklrean during params validation
+        self.b = b
+        self.k1 = k1
+        self.delta = delta
+        self.transformer = transformer
 
         transformer_dispatch = {
             "bm25": BM25Transformer,
