@@ -1,0 +1,137 @@
+[project]
+name = "bm25_vectorizer"
+description = "BM25 Vectorizer (Scikit-learn Compatible)"
+readme = "README.md"
+version = "0.0.1"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "packaging",
+    "typing-extensions",
+]
+authors = [
+    { name = "Vladimir Gurevich", email = "imvladikon@gmail.com" },
+]
+
+[project.optional-dependencies]
+dev = [
+    "uv",
+    "python-dotenv",
+    "ruff",
+    "mypy",
+    "pre-commit"
+]
+
+[build-system]
+requires = [
+    "setuptools>=44",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = [
+    ".",
+]
+include = [
+    "bm25_vectorizer*",
+]
+exclude = [
+    "data*",
+    "tests*",
+]
+
+[tool.pip-tools]
+generate-hashes = true
+
+[tool.pytest.ini_options]
+pythonpath = "."
+addopts = "-p no:warnings"
+log_cli = true
+testpaths = "Test"
+norecursedirs = "_*"
+
+[tool.black]
+line-length = 91
+target-version = [
+    "py310",
+    "py311",
+    "py312",
+]
+exclude = "((\\.eggs|\\.git|\\.pytype|\\.pytest_cache|build|dist))"
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+lines_after_imports = 2
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+line_length = 91
+skip_glob = [
+    ".tox",
+    "__pycache__",
+    "*.pyc",
+    "venv*/*",
+    "reports",
+    "venv",
+    "env",
+    ".env",
+    ".venv",
+    "dist",
+]
+
+[tool.flake8]
+max-line-length = 91
+max-complexity = 14
+ignore = [
+    "E203",
+    "E121",
+    "E123",
+    "E126",
+    "E24",
+    "E704",
+    "W503",
+    "W504",
+]
+exclude = [
+    ".git",
+    "__pycache__",
+    ".eggs",
+    ".venv",
+    ".env",
+    "venv",
+    "build",
+    "dist",
+]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+
+[tool.coverage]
+precision = 2
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = [
+    "data",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+]
+ignore = [
+    "E731", # do not assign a lambda expression, use def
+    "E741", # do not use lambdas
+    "E722" # ignore bare except
+]
