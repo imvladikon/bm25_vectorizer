@@ -3,6 +3,7 @@ name = "bm25_vectorizer"
 description = "BM25 Vectorizer (Scikit-learn Compatible)"
 readme = "README.md"
 version = "0.0.1"
+license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
@@ -36,7 +37,7 @@ where = [
     ".",
 ]
 include = [
-    "beasquill*",
+    "bm25_vectorizer*",
 ]
 exclude = [
     "data*",
