@@ -18,6 +18,8 @@ compatible with scikit-learn's API.
 They can be used as alternatives to TF-IDF for text ranking and retrieval tasks.
 """  # noqa
 
+__version__ = "0.0.1"
+
 
 class BM25TransformerBase(TransformerMixin, BaseEstimator):
     def __init__(
