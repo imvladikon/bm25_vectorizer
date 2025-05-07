@@ -11,9 +11,6 @@ dependencies = [
     "packaging",
     "typing-extensions",
 ]
-license = [
-    { text = "MIT", file = "LICENSE" },
-]
 authors = [
     { name = "Vladimir Gurevich", email = "imvladikon@gmail.com" },
 ]
