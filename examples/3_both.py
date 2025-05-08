@@ -5,7 +5,7 @@ from bm25_vectorizer import BM25Vectorizer
 
 
 class BM25SearchEngine:
-    def __init__(self, documents, document_ids=None, transformer='bm25', k1=1.5, b=0.75):
+    def __init__(self, documents, document_ids=None, transformer="bm25", k1=1.5, b=0.75):
         self.documents = documents
         self.document_ids = document_ids if document_ids is not None else list(range(len(documents)))
 
@@ -33,11 +33,7 @@ class BM25SearchEngine:
         # Format results
         results = []
         for idx in top_indices:
-            results.append({
-                'id': self.document_ids[idx],
-                'document': self.documents[idx],
-                'score': similarities[idx]
-            })
+            results.append({"id": self.document_ids[idx], "document": self.documents[idx], "score": similarities[idx]})
 
         return results
 
@@ -58,11 +54,7 @@ class BM25SearchEngine:
         # Format results
         results = []
         for idx in top_indices:
-            results.append({
-                'id': self.document_ids[idx],
-                'document': self.documents[idx],
-                'score': similarities[idx]
-            })
+            results.append({"id": self.document_ids[idx], "document": self.documents[idx], "score": similarities[idx]})
 
         return results
 
@@ -78,14 +70,14 @@ if __name__ == "__main__":
         "Machine learning algorithms for text classification",
         "Deep learning frameworks: TensorFlow and PyTorch",
         "Statistical methods for data analysis",
-        "Building recommendation systems with collaborative filtering"
+        "Building recommendation systems with collaborative filtering",
     ]
 
     # Create document IDs (could be database IDs, filenames, etc.)
     doc_ids = [f"doc_{i}" for i in range(len(documents))]
 
     # Initialize search engine
-    search_engine = BM25SearchEngine(documents, doc_ids, transformer='bm25l', k1=1.2, b=0.8)
+    search_engine = BM25SearchEngine(documents, doc_ids, transformer="bm25l", k1=1.2, b=0.8)
 
     # Example 1: Search for documents
     query = "Statistical methods for data analysis"  # "python data analysis"

@@ -10,7 +10,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Normalizer
 
-from bm25_vectorizer import BM25Vectorizer, BM25TransformerBase
+from bm25_vectorizer import BM25TransformerBase, BM25Vectorizer
 
 HERE = Path(__file__).parent.resolve()
 ROOT_DIR = HERE.parent
@@ -304,13 +304,16 @@ class TestBM25VectorizerExtended(unittest.TestCase):
         self.assertTrue(np.any(sim > 0))
 
     def test_examples(self):
-        # run all examples (*.py) in the examples directory
-        # please do not put any dangerous code in the examples directory
         examples_dir = ROOT_DIR / "examples"
+        import subprocess
+
         for example_file in examples_dir.glob("*.py"):
-            with open(example_file, "r") as f:
-                code = f.read()
-                exec(code)
+            result = subprocess.run(
+                ["python", str(example_file)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, f"Example {example_file} failed with error: {result.stderr}")
 
 
 if __name__ == "__main__":

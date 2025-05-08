@@ -1,7 +1,8 @@
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-from bm25_vectorizer import BM25Vectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+from bm25_vectorizer import BM25Vectorizer
 
 # Sample corpus of documents
 corpus = [
@@ -12,11 +13,10 @@ corpus = [
     "Document retrieval and information retrieval systems",
     "quick something fox something jumps",
     "Machine learning for text ranking and retrieval",
-    "Natural language processing techniques"
+    "Natural language processing techniques",
 ]
 
-# Create and fit the BM25 vectorizer
-vectorizer = BM25Vectorizer(transformer='bm25', k1=1.5, b=0.75)
+vectorizer = BM25Vectorizer(transformer="bm25plus", k1=1.5, b=0.75)
 vectorizer.fit(corpus)
 
 tfidf_vectorizer = TfidfVectorizer()
@@ -46,11 +46,10 @@ ranked_tfidf_indices = np.argsort(tfidf_similarities)[::-1]  # Sort in descendin
 print("Search results for query:", query)
 print("-" * 50)
 for i, idx in enumerate(ranked_indices):
-    print(f"Rank {i+1} (Score: {similarities[idx]:.4f}): {corpus[idx]}")
-
+    print(f"Rank {i + 1} (Score: {similarities[idx]:.4f}): {corpus[idx]}")
 
 print("-" * 50)
 print("Search results for query using TF-IDF:", query)
 print("-" * 50)
 for i, idx in enumerate(ranked_tfidf_indices):
-    print(f"Rank {i+1} (Score: {tfidf_similarities[idx]:.4f}): {corpus[idx]}")
+    print(f"Rank {i + 1} (Score: {tfidf_similarities[idx]:.4f}): {corpus[idx]}")
