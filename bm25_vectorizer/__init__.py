@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable, Literal, Optional, Type, Union
+from typing import Any, Iterable, Literal, Optional, Type
 
 import numpy as np
 import scipy.sparse as sp
@@ -18,18 +18,18 @@ compatible with scikit-learn's API.
 They can be used as alternatives to TF-IDF for text ranking and retrieval tasks.
 """  # noqa
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 
 class BM25TransformerBase(TransformerMixin, BaseEstimator):
     def __init__(
-            self,
-            k1: float = 1.5,
-            b: float = 0.75,
-            delta: float = 1.0,
-            epsilon: float = 0.25,
-            log1p_idf: bool = False,
-            use_idf: bool = True
+        self,
+        k1: float = 1.5,
+        b: float = 0.75,
+        delta: float = 1.0,
+        epsilon: float = 0.25,
+        log1p_idf: bool = False,
+        use_idf: bool = True,
     ) -> None:
         """
         k1 : float, default=1.5
@@ -39,41 +39,41 @@ class BM25TransformerBase(TransformerMixin, BaseEstimator):
              - when there are documents with varying term frequencies
              - when terms appear with different frequencies, controls how much these repeated occurrences matter
              - short vs long documents with repeated terms (how much those repetitions contribute to relevance)
-           
+
         b : float, default=0.75
              controls document length normalization how much the relevance scoring should be adjusted
                    based on a document's length relative to the average document length in the collection
              - 0 means no length normalization
-             - 1 means full normalization. 
+             - 1 means full normalization.
              higher values give more penalty to longer documents.
-        
+
         delta : float, default=1.0
-             depends on the variant of BM25, general purpose as a "boosting" or "smoothing" parameter 
+             depends on the variant of BM25, general purpose as a "boosting" or "smoothing" parameter
              that helps ensure terms make meaningful contributions to relevance scores
              regardless of document length or frequency characteristics.
-                      
+
         epsilon: lower-bounding of IDF values, how very common terms are scored in the relevance ranking:
            - higher (0.5-1.0): common terms retain more influence in scoring, reducing the gap between rare and common terms
            - lower  (0.1-0.2): common terms have minimal impact, creating greater distinction between rare and common terms
            - 0: common terms could have negative IDF, potentially reducing document scores when they contain extremely common terms
-        
+
         log1p_idf: bool = False
             whether to use log1p (log(1 + x)) - smoothed Robertson–Sparck Jones IDF
-            instead of log (log(x)) for IDF calculation to smooth out the IDF values 
+            instead of log (log(x)) for IDF calculation to smooth out the IDF values
             and prevent extreme values from dominating the scoring.
-            
+
             Setting it to True guarantees non-negative IDF values even in
             very small corpora (N ≤ 2), at the cost of slightly compressing
             the range of rare-term weights.
-        
+
         use_idf: whether to include the inverse document frequency (IDF) component in the scoring.
             If True, rare terms will have higher weight than common terms.
-            If False, term rarity is ignored and only term frequency and document 
+            If False, term rarity is ignored and only term frequency and document
             length normalization are considered.
-            
+
             Setting use_idf=False effectively transforms the ranking function into
             a pure term frequency model without considering document frequency.
-            This might be useful when working with a very small corpus or in special 
+            This might be useful when working with a very small corpus or in special
             cases where term rarity should be ignored.
         """  # noqa
         self.k1: float = k1
@@ -108,7 +108,6 @@ class BM25TransformerBase(TransformerMixin, BaseEstimator):
 
 
 class BM25Transformer(BM25TransformerBase):
-
     @override
     def _calc_idf(self, df: ndarray, n_samples: int) -> ndarray:
         """
@@ -121,7 +120,7 @@ class BM25Transformer(BM25TransformerBase):
         where
           N   = total number of documents
           n_t = number of documents that contain term t
-        
+
         prevents negative IDF values when term frequency exceeds half the collection size.
         """  # noqa
         if self.log1p_idf:
@@ -144,9 +143,11 @@ class BM25Transformer(BM25TransformerBase):
           |d|   = document length
           avgdl = average document length in the corpus
           k1, b = BM25 parameters
-          
+
         applying term frequency saturation and document length normalization.
         """  # noqa
+        if copy:
+            X = X.copy()
         # old (seems like not correct):
         # dl: ndarray = np.diff(X.indptr)
         dl = X.sum(axis=1).A1  # token length of each row in X
@@ -159,7 +160,6 @@ class BM25Transformer(BM25TransformerBase):
 
 
 class BM25LTransformer(BM25TransformerBase):
-
     @override
     def _calc_idf(self, df: ndarray, n_samples: int) -> ndarray:
         """
@@ -190,11 +190,13 @@ class BM25LTransformer(BM25TransformerBase):
           |d|   = document length
           avgdl = average document length in the corpus
           k1, b, δ = BM25L parameters
-        
-        addresses the length bias issue described in the paper, 
+
+        addresses the length bias issue described in the paper,
         where standard BM25 unfairly penalizes longer documents
         by adding the delta parameter to c_td, it ensures that longer documents aren't unduly penalized.
         """  # noqa
+        if copy:
+            X = X.copy()
         dl: ndarray = np.diff(X.indptr)
         rep: ndarray = np.repeat(dl, np.diff(X.indptr))
         # Calculate c_td
@@ -236,14 +238,16 @@ class BM25PlusTransformer(BM25TransformerBase):
           |d|   = document length
           avgdl = average document length in the corpus
           k1, b, δ = BM25+ parameters
-        
-        addresses the penalization of long documents by adding a delta parameter after 
+
+        addresses the penalization of long documents by adding a delta parameter after
         the term frequency normalization step, rather than inside it as BM25L does.
         """  # noqa
+        if copy:
+            X = X.copy()
         dl: ndarray = np.diff(X.indptr)
         rep: ndarray = np.repeat(dl, np.diff(X.indptr))
         data: ndarray = self.delta + (
-                (X.data * (self.k1 + 1)) / (self.k1 * (1 - self.b + self.b * rep / self.avgdl) + X.data)
+            (X.data * (self.k1 + 1)) / (self.k1 * (1 - self.b + self.b * rep / self.avgdl) + X.data)
         )
         X = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
         if self.use_idf:
@@ -253,15 +257,16 @@ class BM25PlusTransformer(BM25TransformerBase):
 
 class BM25AdptTransformer(BM25TransformerBase):
     def __init__(
-            self,
-            k1: float = 1.5,
-            b: float = 0.75,
-            delta: float = 1.0,
-            epsilon: float = 0.25,
-            use_idf: bool = True,
-            max_iter: int = 100
+        self,
+        k1: float = 1.5,
+        b: float = 0.75,
+        delta: float = 1.0,
+        epsilon: float = 0.25,
+        use_idf: bool = True,
+        max_iter: int = 100,
+        **kwargs,
     ) -> None:
-        super().__init__(k1, b, delta, epsilon, use_idf)
+        super().__init__(k1=k1, b=b, delta=delta, epsilon=epsilon, use_idf=use_idf, **kwargs)
         self.k1_terms: ndarray | None = None
         self.max_iter = max_iter
         self.info_gains: ndarray | None = None  # store G_1^q values
@@ -270,10 +275,10 @@ class BM25AdptTransformer(BM25TransformerBase):
     def _calc_idf(self, df: ndarray, n_samples: int) -> ndarray:
         """
         BM25-adpt inverse-document frequency (IDF)
-        
+
         BM25-adpt uses information gain (G_1^q) in place of IDF:
         G_1^q = log2((df_2 + 0.5)/(df_1 + 1)) - log2((df_1 + 0.5)/(N + 1))
-        
+
         As a simplification for initial calculation, we use:
                          n_t + 0.5
         idf(t) = −log2(-------------)
@@ -282,7 +287,7 @@ class BM25AdptTransformer(BM25TransformerBase):
         where
           N   = total number of documents
           n_t = number of documents that contain term t
-        
+
         information gain based IDF
         """  # noqa
         # This is a simplified version - the real G_1^q will be calculated in fit
@@ -330,7 +335,7 @@ class BM25AdptTransformer(BM25TransformerBase):
         return df_r
 
     def _compute_info_gain(
-            self, X: csr_matrix, n_samples: int, df: ndarray, max_r: int = 5
+        self, X: csr_matrix, n_samples: int, df: ndarray, max_r: int = 5
     ) -> tuple[ndarray, list[ndarray]]:
         """
         Compute information gain values G_r^q for different r values.
@@ -343,8 +348,9 @@ class BM25AdptTransformer(BM25TransformerBase):
         g_values = []
         for r in range(max_r):
             # G_r^q = log2((df_{r+1} + 0.5)/(df_r + 1)) - log2((df_r + 0.5)/(N + 1))
-            g_r = np.log2((df_values[r + 2] + 0.5) / (df_values[r + 1] + 1)) - \
-                  np.log2((df_values[r + 1] + 0.5) / (n_samples + 1))
+            g_r = np.log2((df_values[r + 2] + 0.5) / (df_values[r + 1] + 1)) - np.log2(
+                (df_values[r + 1] + 0.5) / (n_samples + 1)
+            )
             g_values.append(g_r)
 
         # G_1^q will be used as IDF substitute
@@ -369,7 +375,7 @@ class BM25AdptTransformer(BM25TransformerBase):
         # In practice, Newton-Raphson or other optimization methods would be better
         for term_idx in range(n_terms):
             best_k1 = self.k1
-            min_error = float('inf')
+            min_error = float("inf")
 
             # Try different k1 values and find the one that minimizes error
             for k1_candidate in np.linspace(0.1, 5.0, 50):  # Range of potential k1 values
@@ -430,37 +436,41 @@ class BM25AdptTransformer(BM25TransformerBase):
           avgdl = average document length in the corpus
           b     = length-normalisation parameter
         """  # noqa
-        dl: ndarray = np.diff(X.indptr)
-        rep: ndarray = np.repeat(dl, np.diff(X.indptr))
+        if self.k1_terms is None or self.info_gains is None:
+            raise RuntimeError("fit() must be called before transform()")
 
-        # Use term-specific k1 values
-        k1_rep: ndarray = np.repeat(self.k1_terms[X.indices], np.diff(X.indptr))
+        if copy:
+            X = X.copy()
 
-        # Apply BM25-adpt formula with term-specific k1 values
-        data: ndarray = X.data * (k1_rep + 1) / (X.data + k1_rep * (1 - self.b + self.b * rep / self.avgdl))
-
-        X = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
-
-        # Use G_1^q values instead of standard IDF
+        # document lengths |d|
+        dl = np.diff(X.indptr)  # shape = (n_docs,)
+        rep_dl = np.repeat(dl, dl)  # 1 per non-zero entry
+        # term-specific k1 vector, 1 per non-zero entry
+        k1_vec = self.k1_terms[X.indices]
+        # BM25-adpt core
+        denom = k1_vec * (1 - self.b + self.b * rep_dl / self.avgdl) + X.data
+        data = X.data * (k1_vec + 1) / denom
+        X_new = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
         if self.use_idf:
-            X = X @ self._idf_diag
-        return X
+            X_new = X_new @ self._idf_diag
+        return X_new
 
 
 class BM25TTransformer(BM25TransformerBase):
     def __init__(
-            self,
-            k1: float = 1.5,
-            b: float = 0.75,
-            delta: float = 1.0,
-            epsilon: float = 0.25,
-            use_idf: bool = True,
-            max_iter: int = 20
+        self,
+        k1: float = 1.5,
+        b: float = 0.75,
+        delta: float = 1.0,
+        epsilon: float = 0.25,
+        use_idf: bool = True,
+        max_iter: int = 20,
+        **kwargs,
     ) -> None:
         """
-        :param max_iter: Max Newton-Raphson iterations 
+        :param max_iter: Max Newton-Raphson iterations
         """  # noqa
-        super().__init__(k1, b, delta, epsilon, use_idf)
+        super().__init__(k1=k1, b=b, delta=delta, epsilon=epsilon, use_idf=use_idf, **kwargs)
         self.k1_terms: Optional[ndarray] = None
         self.max_iter = max_iter
 
@@ -561,7 +571,7 @@ class BM25TTransformer(BM25TransformerBase):
     @override
     def fit(self, X: csr_matrix) -> Self:
         """
-        Fit the transformer, calculating term-specific k1 values using 
+        Fit the transformer, calculating term-specific k1 values using
         the log-logistic method as described in the paper.
         """  # noqa
         df: ndarray = np.bincount(X.indices, minlength=X.shape[1])
@@ -599,10 +609,14 @@ class BM25TTransformer(BM25TransformerBase):
           avgdl = average document length in the corpus
           b     = length-normalisation parameter
         """  # noqa
+        if copy:
+            X = X.copy()
+        # document lengths (|d|)
         dl: ndarray = np.diff(X.indptr)
-        rep: ndarray = np.repeat(dl, np.diff(X.indptr))
+        # length == nnz
+        rep: ndarray = np.repeat(dl, dl)
         # Use term-specific k1 values
-        k1_rep: ndarray = np.repeat(self.k1_terms[X.indices], np.diff(X.indptr))
+        k1_rep: ndarray = self.k1_terms[X.indices]
         # Apply BM25T formula with term-specific k1 values
         data: ndarray = X.data * (k1_rep + 1) / (X.data + k1_rep * (1 - self.b + self.b * rep / self.avgdl))
         X = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
@@ -612,7 +626,6 @@ class BM25TTransformer(BM25TransformerBase):
 
 
 class TFIDF1ApTransformer(BM25TransformerBase):
-
     @override
     def _calc_idf(self, df: ndarray, n_samples: int) -> ndarray:
         """
@@ -631,15 +644,17 @@ class TFIDF1ApTransformer(BM25TransformerBase):
     def transform(self, X: csr_matrix, copy: bool = True) -> csr_matrix:
         """
         TF1ap × IDF score for term t in document d:
-                                                          tf_td                        
+                                                          tf_td
         TF1ap(t, d) = idf(t) · ( 1 + ln(1 + ln( ------------------------ + δ )))
-                                                 1 – b + b · |d| / avgdl     
+                                                 1 – b + b · |d| / avgdl
         where
           tf_td   = term frequency of t in d
           |d|    = document length
           avgdl  = average document length in the corpus
           b, δ   = TF1ap parameters
         """  # noqa
+        if copy:
+            X = X.copy()
         dl: ndarray = np.diff(X.indptr)
         rep: ndarray = np.repeat(dl, np.diff(X.indptr))
         data: ndarray = 1 + np.log(1 + np.log(X.data / (1 - self.b + self.b * rep / self.avgdl) + self.delta))
@@ -650,13 +665,12 @@ class TFIDF1ApTransformer(BM25TransformerBase):
 
 
 class SimilarityMixin:
-
     def similarity(
-            self,
-            item1: Any,
-            item2: Any,
-            metric: Literal["cosine", "dot", "jaccard"] = "cosine",
-            transformer: str | None = None,
+        self,
+        item1: Any,
+        item2: Any,
+        metric: Literal["cosine", "dot", "jaccard"] = "cosine",
+        transformer: str | None = None,
     ) -> float:
         """
         Compute similarity between *item1* and *item2*.
@@ -703,14 +717,11 @@ class SimilarityMixin:
             union = len(idx1 | idx2)
             return inter / union
 
-        raise ValueError(
-            f"Unsupported metric '{metric}'. "
-            "Choose from 'cosine', 'dot', or 'jaccard'."
-        )
+        raise ValueError(f"Unsupported metric '{metric}'. Choose from 'cosine', 'dot', or 'jaccard'.")
 
 
 class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
-    transformer_dispatch: Dict[str, Type[BM25TransformerBase]] = {
+    transformer_dispatch: dict[str, Type[BM25TransformerBase]] = {
         "bm25": BM25Transformer,
         "bm25l": BM25LTransformer,
         "bm25plus": BM25PlusTransformer,
@@ -720,14 +731,14 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
     }
 
     def __init__(
-            self,
-            transformer: str = "bm25",
-            k1: float = 1.5,
-            b: float = 0.75,
-            delta: float = 1.0,
-            epsilon: float = 0.25,
-            log1p_idf: bool = False,
-            **kwargs,
+        self,
+        transformer: Literal["bm25", "bm25l", "bm25plus", "bm25adpt", "bm25t", "tfidf1ap"] = "bm25",
+        k1: float = 1.5,
+        b: float = 0.75,
+        delta: float = 1.0,
+        epsilon: float = 0.25,
+        log1p_idf: bool = False,
+        **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.transformer: str = transformer
@@ -745,14 +756,14 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
         ).fit(X)
         return self
 
-    def transform(self, raw_documents: Union[list, np.ndarray], copy: bool = True) -> csr_matrix:
+    def transform(self, raw_documents: list | np.ndarray) -> csr_matrix:
         check_is_fitted(self, "_tfidf")
         return super().transform(raw_documents)
 
     def _vectorize(
-            self,
-            item: Any,
-            transformer: str | None = None,
+        self,
+        item: Any,
+        transformer: str | None = None,
     ) -> sp.csr_matrix:
         """
         Convert *item* to a single-row sparse weighted vector.
@@ -781,15 +792,10 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
         elif isinstance(item, Iterable):
             docs_list = list(item)
             if not docs_list or not isinstance(docs_list[0], str):
-                raise TypeError(
-                    "Iterable *item* must contain at least one raw-string document"
-                )
+                raise TypeError("Iterable *item* must contain at least one raw-string document")
             docs = [docs_list[0]]
         else:
-            raise TypeError(
-                "item must be a raw document (str), an iterable[str], "
-                "or a scipy sparse row-vector"
-            )
+            raise TypeError("item must be a raw document (str), an iterable[str], or a scipy sparse row-vector")
 
         counts = super().transform(docs)
 

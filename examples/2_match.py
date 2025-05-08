@@ -1,7 +1,8 @@
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-from bm25_vectorizer import BM25Vectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+from bm25_vectorizer import BM25Vectorizer
 
 corpus = [
     "Python programming language basics",
@@ -13,7 +14,7 @@ corpus = [
     "Data analytics with pandas",
 ]
 
-vectorizer = BM25Vectorizer(transformer='bm25plus', k1=1.2, b=0.8, delta=0.5)
+vectorizer = BM25Vectorizer(transformer="bm25plus", k1=1.2, b=0.8, delta=0.5)
 vectorizer.fit(corpus)
 
 tf_idf_vectorizer = TfidfVectorizer()
