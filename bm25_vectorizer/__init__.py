@@ -18,7 +18,7 @@ compatible with scikit-learn's API.
 They can be used as alternatives to TF-IDF for text ranking and retrieval tasks.
 """  # noqa
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 
 class BM25TransformerBase(TransformerMixin, BaseEstimator):
