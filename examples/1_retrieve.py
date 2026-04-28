@@ -33,6 +33,9 @@ query_vector = vectorizer.transform([query])
 # Transform the query into TF-IDF vector
 query_tfidf_vector = tfidf_vectorizer.transform([query])
 
+# For retrieval, compare ranked similarities (e.g., cosine) between query/document vectors.
+# This is generally preferable to interpreting absolute raw BM25 weights across queries,
+# especially for variants like bm25adpt where raw term weights may be negative.
 # Calculate cosine similarity between query and all documents
 similarities = cosine_similarity(query_vector, document_vectors).flatten()
 # Calculate cosine similarity between query and all documents using TF-IDF

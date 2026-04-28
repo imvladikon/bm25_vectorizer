@@ -197,8 +197,9 @@ class BM25LTransformer(BM25TransformerBase):
         """  # noqa
         if copy:
             X = X.copy()
-        dl: ndarray = np.diff(X.indptr)
-        rep: ndarray = np.repeat(dl, np.diff(X.indptr))
+        nnz_per_doc: ndarray = np.diff(X.indptr)
+        dl: ndarray = X.sum(axis=1).A1
+        rep: ndarray = np.repeat(dl, nnz_per_doc)
         # Calculate c_td
         ctd: ndarray = X.data / (1 - self.b + self.b * rep / self.avgdl)
         # Apply BM25L formula - without multiplying by X.data again
@@ -244,8 +245,9 @@ class BM25PlusTransformer(BM25TransformerBase):
         """  # noqa
         if copy:
             X = X.copy()
-        dl: ndarray = np.diff(X.indptr)
-        rep: ndarray = np.repeat(dl, np.diff(X.indptr))
+        nnz_per_doc: ndarray = np.diff(X.indptr)
+        dl: ndarray = X.sum(axis=1).A1
+        rep: ndarray = np.repeat(dl, nnz_per_doc)
         data: ndarray = self.delta + (
             (X.data * (self.k1 + 1)) / (self.k1 * (1 - self.b + self.b * rep / self.avgdl) + X.data)
         )
@@ -310,7 +312,7 @@ class BM25AdptTransformer(BM25TransformerBase):
             return df
 
         # For r > 1, calculate normalized term frequencies and count docs where c_td ≥ r-0.5
-        dl = np.diff(X.indptr)
+        dl = X.sum(axis=1).A1
         avgdl = np.mean(dl)
 
         # Initialize result array
@@ -405,7 +407,7 @@ class BM25AdptTransformer(BM25TransformerBase):
         """  # noqa
         df: ndarray = np.bincount(X.indices, minlength=X.shape[1])
         n_samples: int = X.shape[0]
-        self.avgdl = np.mean(np.diff(X.indptr))
+        self.avgdl = X.sum(axis=1).A1.mean()
 
         # Compute information gain values
         G_1, g_normalized = self._compute_info_gain(X, n_samples, df)
@@ -443,8 +445,9 @@ class BM25AdptTransformer(BM25TransformerBase):
             X = X.copy()
 
         # document lengths |d|
-        dl = np.diff(X.indptr)  # shape = (n_docs,)
-        rep_dl = np.repeat(dl, dl)  # 1 per non-zero entry
+        nnz_per_doc = np.diff(X.indptr)  # shape = (n_docs,)
+        dl = X.sum(axis=1).A1
+        rep_dl = np.repeat(dl, nnz_per_doc)  # 1 per non-zero entry
         # term-specific k1 vector, 1 per non-zero entry
         k1_vec = self.k1_terms[X.indices]
         # BM25-adpt core
@@ -517,7 +520,7 @@ class BM25TTransformer(BM25TransformerBase):
         k1_terms = np.full(n_terms, self.k1)  # Initialize with default k1
 
         # Compute document lengths
-        dl = np.diff(X.indptr)
+        dl = X.sum(axis=1).A1
 
         # For each term, solve for term-specific k1
         for term_idx in range(n_terms):
@@ -578,7 +581,7 @@ class BM25TTransformer(BM25TransformerBase):
         n_samples: int = X.shape[0]
         idf: ndarray = self._calc_idf(df, n_samples)
         self._idf_diag = sp.diags(idf, offsets=0, format="csr")
-        self.avgdl = np.mean(np.diff(X.indptr))
+        self.avgdl = X.sum(axis=1).A1.mean()
 
         # Build elite sets (documents containing each term)
         elite_sets = [[] for _ in range(X.shape[1])]
@@ -612,9 +615,10 @@ class BM25TTransformer(BM25TransformerBase):
         if copy:
             X = X.copy()
         # document lengths (|d|)
-        dl: ndarray = np.diff(X.indptr)
+        dl: ndarray = X.sum(axis=1).A1
+        nnz_per_doc: ndarray = np.diff(X.indptr)
         # length == nnz
-        rep: ndarray = np.repeat(dl, dl)
+        rep: ndarray = np.repeat(dl, nnz_per_doc)
         # Use term-specific k1 values
         k1_rep: ndarray = self.k1_terms[X.indices]
         # Apply BM25T formula with term-specific k1 values
@@ -655,8 +659,9 @@ class TFIDF1ApTransformer(BM25TransformerBase):
         """  # noqa
         if copy:
             X = X.copy()
-        dl: ndarray = np.diff(X.indptr)
-        rep: ndarray = np.repeat(dl, np.diff(X.indptr))
+        nnz_per_doc: ndarray = np.diff(X.indptr)
+        dl: ndarray = X.sum(axis=1).A1
+        rep: ndarray = np.repeat(dl, nnz_per_doc)
         data: ndarray = 1 + np.log(1 + np.log(X.data / (1 - self.b + self.b * rep / self.avgdl) + self.delta))
         X = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
         if self.use_idf:

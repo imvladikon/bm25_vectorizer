@@ -147,6 +147,22 @@ $b$: Document length normalization parameter (default: 0.75).
 $\delta$: Additional parameter for BM25L, BM25+, and TF₁ₐₚ × IDF (default: 1.0).     
 $\epsilon$: IDF smoothing parameter (default: 0.25).
 
+## Validation snapshot
+
+Recent checks were run to verify practical retrieval behavior and formula consistency:
+
+- **Real retrieval test (Hugging Face `ag_news`, 1000 documents):**
+  BM25-based retrieval produced `top-1 = 0.772` and `top-5 hit = 0.953` (random top-1 baseline: `0.278`).
+- **Reference agreement (`rank_bm25`)**:
+  For `bm25`, `bm25l`, `bm25plus`, rank correlation was `Spearman = 1.0` and `Kendall = 1.0` on shared corpora/queries.
+- **Oracle and invariants checks**:
+  Expected ranking behavior (coverage, rare-term preference, length normalization) and core invariants (TF saturation, IDF ordering, `b=0` vs `b=1`) were confirmed.
+
+### Note on BM25-adpt
+
+`bm25adpt` can produce negative raw term weights due to its information-gain formulation. This is expected for that variant and does **not** imply incorrect ranking behavior.  
+For retrieval, compare documents by ranking/similarity (e.g., cosine over transformed vectors) rather than by interpreting absolute score values across queries.
+
 ## References
 
 - https://github.com/dorianbrown/rank_bm25

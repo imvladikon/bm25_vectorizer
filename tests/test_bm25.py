@@ -127,6 +127,47 @@ class TestBM25VectorizerExtended(unittest.TestCase):
             diff_with_norm, diff_without_norm, "Length normalization effect should be stronger with b=1.0"
         )
 
+    def test_length_normalization_token_count_for_all_variants(self):
+        """Length normalization must use token count, not nnz per document."""
+        corpus = [
+            "apple x x x",
+            "apple x",
+            "banana y",
+        ]
+        term = "apple"
+        variants = ["bm25l", "bm25plus", "bm25adpt", "bm25t", "tfidf1ap"]
+
+        for variant in variants:
+            vec = BM25Vectorizer(
+                transformer=variant,
+                b=1.0,
+                token_pattern=r"(?u)\b\w+\b",
+                stop_words=None,
+            ).fit(corpus)
+            X = vec.transform(corpus).toarray()
+            term_idx = list(vec.get_feature_names_out()).index(term)
+            long_doc_score = X[0, term_idx]
+            short_doc_score = X[1, term_idx]
+
+            self.assertNotEqual(
+                long_doc_score,
+                short_doc_score,
+                f"{variant}: scores should differ when token lengths differ",
+            )
+            idf_value = float(vec._tfidf._idf_diag.diagonal()[term_idx])
+            if idf_value >= 0:
+                self.assertLess(
+                    long_doc_score,
+                    short_doc_score,
+                    f"{variant}: longer doc should be penalized more with b=1.0",
+                )
+            else:
+                self.assertGreater(
+                    long_doc_score,
+                    short_doc_score,
+                    f"{variant}: longer doc should be closer to zero with negative IDF",
+                )
+
     def test_base_class_methods(self):
         # Test that base class methods raise NotImplementedError
         base = BM25TransformerBase()
