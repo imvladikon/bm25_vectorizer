@@ -18,7 +18,7 @@ compatible with scikit-learn's API.
 They can be used as alternatives to TF-IDF for text ranking and retrieval tasks.
 """  # noqa
 
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 
 class BM25TransformerBase(TransformerMixin, BaseEstimator):
@@ -158,6 +158,15 @@ class BM25Transformer(BM25TransformerBase):
 
 
 class BM25LTransformer(BM25TransformerBase):
+    """
+    BM25L variant compatible with `rank_bm25`.
+
+    Carries an extra ``tf_td`` multiplier outside the normalised-tf factor.
+    This matches `rank_bm25.BM25L` exactly but deviates from the canonical
+    Lv & Zhai (2011) / Kamphuis et al. (2020) formulation; for that, see
+    :class:`BM25LCanonicalTransformer`.
+    """  # noqa
+
     @override
     def _calc_idf(self, df: ndarray, n_samples: int) -> ndarray:
         """
@@ -177,21 +186,16 @@ class BM25LTransformer(BM25TransformerBase):
     @override
     def transform(self, X: csr_matrix, copy: bool = True) -> csr_matrix:
         """
-        BM25L score for term t in document d:
+        BM25L score (rank_bm25-compatible) for term t in document d:
                                   tf_td · (k1 + 1) · (c_td + δ)
         BM25L(t, d) = idf(t) · -------------------------------------
                                            k1 + c_td + δ
         with
           c_td = tf_td / (1 – b + b · |d| / avgdl)
-        where
-          tf_td  = term-frequency of t in d
-          |d|   = document length
-          avgdl = average document length in the corpus
-          k1, b, δ = BM25L parameters
 
-        addresses the length bias issue described in the paper,
-        where standard BM25 unfairly penalizes longer documents
-        by adding the delta parameter to c_td, it ensures that longer documents aren't unduly penalized.
+        Note: the leading ``tf_td`` factor is the rank_bm25 form. The canonical
+        Lv & Zhai (2011) BM25L (also implemented by `bm25s`) drops this factor;
+        see :class:`BM25LCanonicalTransformer`.
         """  # noqa
         if copy:
             X = X.copy()
@@ -201,6 +205,52 @@ class BM25LTransformer(BM25TransformerBase):
         # Calculate c_td
         ctd: ndarray = X.data / (1 - self.b + self.b * rep / self.avgdl)
         data: ndarray = X.data * (self.k1 + 1) * (ctd + self.delta) / (self.k1 + ctd + self.delta)
+        X = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
+        if self.use_idf:
+            X = X @ self._idf_diag
+        return X
+
+
+class BM25LCanonicalTransformer(BM25TransformerBase):
+    """
+    Canonical BM25L from Lv & Zhai (2011), as reviewed by Kamphuis et al.
+    (ECIR 2020) and implemented by `bm25s`.
+
+    Differs from :class:`BM25LTransformer` (rank_bm25-compatible) by dropping
+    the extra ``tf_td`` multiplier. Like the original paper, the formula is
+    applied for any (doc, term) pair: documents that do not contain a query
+    term still contribute a constant baseline ``idf * (k1+1)*δ/(k1+δ)``. That
+    baseline is sparse-incompatible, so :meth:`transform` only emits the
+    ``tf > 0`` component; full retrieval scoring (including the absent-term
+    baseline) is provided by ``BM25Vectorizer.score`` / ``rank``.
+    """  # noqa
+
+    @override
+    def _calc_idf(self, df: ndarray, n_samples: int) -> ndarray:
+        """Same IDF as BM25L: ln((N+1)/(n_t+0.5))."""
+        idf: ndarray = np.log((n_samples + 1) / (df + 0.5))
+        return np.maximum(idf, self.epsilon * float(np.mean(idf)))
+
+    @override
+    def transform(self, X: csr_matrix, copy: bool = True) -> csr_matrix:
+        """
+        Canonical BM25L score for term t with tf_td > 0 in document d:
+
+                                       (k1 + 1) · (c_td + δ)
+        BM25L(t, d) = idf(t) · ----------------------------------
+                                          k1 + c_td + δ
+
+        Documents with ``tf_td = 0`` would, under the canonical formula,
+        receive ``idf · (k1+1)·δ / (k1+δ)``; that constant is omitted here
+        for sparse compatibility. Use ``BM25Vectorizer.score`` to include it.
+        """  # noqa
+        if copy:
+            X = X.copy()
+        nnz_per_doc: ndarray = np.diff(X.indptr)
+        dl: ndarray = X.sum(axis=1).A1
+        rep: ndarray = np.repeat(dl, nnz_per_doc)
+        ctd: ndarray = X.data / (1 - self.b + self.b * rep / self.avgdl)
+        data: ndarray = (self.k1 + 1) * (ctd + self.delta) / (self.k1 + ctd + self.delta)
         X = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
         if self.use_idf:
             X = X @ self._idf_diag
@@ -721,6 +771,7 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
     transformer_dispatch: dict[str, Type[BM25TransformerBase]] = {
         "bm25": BM25Transformer,
         "bm25l": BM25LTransformer,
+        "bm25l_canonical": BM25LCanonicalTransformer,
         "bm25plus": BM25PlusTransformer,
         "bm25adpt": BM25AdptTransformer,
         "bm25t": BM25TTransformer,
@@ -729,7 +780,9 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
 
     def __init__(
         self,
-        transformer: Literal["bm25", "bm25l", "bm25plus", "bm25adpt", "bm25t", "tfidf1ap"] = "bm25",
+        transformer: Literal[
+            "bm25", "bm25l", "bm25l_canonical", "bm25plus", "bm25adpt", "bm25t", "tfidf1ap"
+        ] = "bm25",
         k1: float = 1.5,
         b: float = 0.75,
         delta: float = 1.0,
@@ -831,6 +884,8 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
         tf = self._get_weighting_transformer(transformer)
         if isinstance(tf, BM25PlusTransformer):
             return self._score_bm25plus(query_counts, document_counts, tf)
+        if isinstance(tf, BM25LCanonicalTransformer):
+            return self._score_bm25l_canonical(query_counts, document_counts, tf)
 
         document_weights = tf.transform(document_counts)
         return (query_counts @ document_weights.T).toarray()
@@ -875,6 +930,33 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
         scores = (query_counts @ component.T).toarray()
         return scores + np.asarray(baseline).reshape(-1, 1)
 
+    def _score_bm25l_canonical(
+        self,
+        query_counts: csr_matrix,
+        document_counts: csr_matrix,
+        transformer: "BM25LCanonicalTransformer",
+    ) -> ndarray:
+        if query_counts.shape[1] != document_counts.shape[1]:
+            raise ValueError("query and document matrices must have the same number of features")
+
+        document_weights = transformer.transform(document_counts)
+        scores = (query_counts @ document_weights.T).toarray()
+
+        tfc_absent = (transformer.k1 + 1) * transformer.delta / (transformer.k1 + transformer.delta)
+        if transformer.use_idf:
+            idf = transformer._idf_diag.diagonal()
+            weight = idf * tfc_absent
+        else:
+            weight = np.full(document_counts.shape[1], tfc_absent)
+
+        baseline = np.asarray(query_counts @ weight).reshape(-1, 1)
+
+        has_term = (document_counts > 0).astype(np.float64)
+        weighted_query = query_counts.multiply(weight)
+        correction = (weighted_query @ has_term.T).toarray()
+
+        return scores + baseline - correction
+
     def rank(
         self,
         queries: str | Iterable[str] | sp.spmatrix,
@@ -904,7 +986,8 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
             raise ValueError("top_n must be between 1 and the number of documents")
 
         tf = self._get_weighting_transformer(transformer)
-        document_weights = None if isinstance(tf, BM25PlusTransformer) else tf.transform(document_counts)
+        needs_special_score = isinstance(tf, (BM25PlusTransformer, BM25LCanonicalTransformer))
+        document_weights = None if needs_special_score else tf.transform(document_counts)
         ranked_batches = []
         score_batches = []
 
@@ -913,6 +996,8 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
             query_batch = query_counts[start:end]
             if isinstance(tf, BM25PlusTransformer):
                 score_batch = self._score_bm25plus(query_batch, document_counts, tf)
+            elif isinstance(tf, BM25LCanonicalTransformer):
+                score_batch = self._score_bm25l_canonical(query_batch, document_counts, tf)
             else:
                 score_batch = (query_batch @ document_weights.T).toarray()
 

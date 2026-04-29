@@ -318,6 +318,60 @@ class TestBM25VectorizerExtended(unittest.TestCase):
 
             self.assertTrue(np.allclose(actual, expected), f"{variant}: direct scores should match rank_bm25")
 
+    def test_bm25l_canonical_matches_bm25s_reference(self):
+        try:
+            import bm25s
+        except ImportError:
+            self.skipTest("bm25s is not installed")
+
+        tokenized = [
+            ["alpha", "alpha", "beta"],
+            ["beta", "gamma"],
+            ["delta", "gamma", "gamma"],
+            ["epsilon", "zeta"],
+        ]
+        corpus = [" ".join(doc) for doc in tokenized]
+        queries = [["alpha"], ["beta"], ["alpha", "gamma"], ["epsilon", "missing"]]
+        kwargs = {"token_pattern": r"(?u)\b\w+\b", "stop_words": None}
+
+        for delta in (0.5, 1.0):
+            ref = bm25s.BM25(method="bm25l", k1=1.5, b=0.75, delta=delta)
+            ref.index(tokenized, show_progress=False)
+            vec = BM25Vectorizer(transformer="bm25l_canonical", k1=1.5, b=0.75, delta=delta, **kwargs).fit(corpus)
+            actual = vec.score([" ".join(q) for q in queries])
+            expected = np.vstack([ref.get_scores(q) for q in queries])
+            self.assertTrue(
+                np.allclose(actual, expected, atol=1e-5),
+                f"bm25l_canonical score must match bm25s for delta={delta}",
+            )
+
+    def test_bm25l_canonical_differs_from_rank_bm25_variant(self):
+        corpus = ["alpha alpha beta", "beta gamma", "delta gamma gamma", "epsilon zeta"]
+        kwargs = {"token_pattern": r"(?u)\b\w+\b", "stop_words": None}
+        rank_vec = BM25Vectorizer(transformer="bm25l", **kwargs).fit(corpus)
+        can_vec = BM25Vectorizer(transformer="bm25l_canonical", **kwargs).fit(corpus)
+
+        rank_scores = rank_vec.score(["alpha gamma"])
+        can_scores = can_vec.score(["alpha gamma"])
+
+        self.assertFalse(np.allclose(rank_scores, can_scores))
+        # Canonical assigns positive baseline to documents missing all query terms;
+        # rank_bm25 form does not.
+        self.assertGreater(can_scores[0, 3], 0.0)
+        self.assertEqual(rank_scores[0, 3], 0.0)
+
+    def test_bm25l_canonical_transform_drops_extra_tf_factor(self):
+        corpus = ["alpha alpha alpha alpha beta"]
+        kwargs = {"token_pattern": r"(?u)\b\w+\b", "stop_words": None}
+        rank_vec = BM25Vectorizer(transformer="bm25l", **kwargs).fit(corpus)
+        can_vec = BM25Vectorizer(transformer="bm25l_canonical", **kwargs).fit(corpus)
+        feats = list(can_vec.get_feature_names_out())
+        ti = feats.index("alpha")
+        rank_w = rank_vec.transform(corpus).toarray()[0, ti]
+        can_w = can_vec.transform(corpus).toarray()[0, ti]
+        # rank_bm25 form has extra tf=4 multiplier vs canonical
+        self.assertAlmostEqual(rank_w / can_w, 4.0, places=4)
+
     def test_bm25plus_score_includes_absent_query_term_delta(self):
         corpus = ["alpha beta", "gamma delta"]
         vec = BM25Vectorizer(
@@ -719,7 +773,7 @@ class TestBM25VectorizerExtended(unittest.TestCase):
         baseline = np.bincount(labels, minlength=4).max() / len(labels)
 
         scores_by_variant = {}
-        for variant in ["bm25", "bm25l", "bm25plus", "bm25adpt", "bm25t", "tfidf1ap"]:
+        for variant in ["bm25", "bm25l", "bm25l_canonical", "bm25plus", "bm25adpt", "bm25t", "tfidf1ap"]:
             vec = BM25Vectorizer(transformer=variant, stop_words="english", min_df=2, log1p_idf=True)
             document_vectors = vec.fit_transform(corpus)
             query_vectors = vec.transform(query_texts)
