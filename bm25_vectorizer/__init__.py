@@ -6,7 +6,7 @@ from numpy import ndarray
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import norm as sparse_norm
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.utils.validation import check_is_fitted
 from typing_extensions import Self, override
 
@@ -91,12 +91,12 @@ class BM25TransformerBase(TransformerMixin, BaseEstimator):
         Calculates IDF and average document length.
         """  # noqa
         df: ndarray = np.bincount(X.indices, minlength=X.shape[1])
-        n_samples: int = X.shape[0]
+        return self.fit_from_stats(df, X.shape[0], X.sum(axis=1).A1)
+
+    def fit_from_stats(self, df: ndarray, n_samples: int, doc_len: ndarray) -> Self:
         idf: ndarray = self._calc_idf(df, n_samples)
         self._idf_diag = sp.diags(idf, offsets=0, format="csr")
-        # old (seems like not correct):
-        # self.avgdl = np.mean(np.diff(X.indptr))
-        self.doc_len_ = X.sum(axis=1).A1  # Σ tf_ij for every document
+        self.doc_len_ = doc_len
         self.avgdl = self.doc_len_.mean()
         return self
 
@@ -127,7 +127,7 @@ class BM25Transformer(BM25TransformerBase):
             idf: ndarray = np.log1p((n_samples - df + 0.5) / (df + 0.5))
         else:
             idf: ndarray = np.log((n_samples - df + 0.5) / (df + 0.5))
-        return np.maximum(idf, self.epsilon * float(np.mean(idf)))
+        return np.where(idf < 0, self.epsilon * float(np.mean(idf)), idf)
 
     @override
     def transform(self, X: csr_matrix, copy: bool = True) -> csr_matrix:
@@ -148,8 +148,6 @@ class BM25Transformer(BM25TransformerBase):
         """  # noqa
         if copy:
             X = X.copy()
-        # old (seems like not correct):
-        # dl: ndarray = np.diff(X.indptr)
         dl = X.sum(axis=1).A1  # token length of each row in X
         rep: ndarray = np.repeat(dl, np.diff(X.indptr))
         data: ndarray = X.data * (self.k1 + 1) / (X.data + self.k1 * (1 - self.b + self.b * rep / self.avgdl))
@@ -180,9 +178,9 @@ class BM25LTransformer(BM25TransformerBase):
     def transform(self, X: csr_matrix, copy: bool = True) -> csr_matrix:
         """
         BM25L score for term t in document d:
-                                  (k1 + 1) · (c_td + δ)
-        BM25L(t, d) = idf(t) · ------------------------------
-                                     k1 + c_td + δ
+                                  tf_td · (k1 + 1) · (c_td + δ)
+        BM25L(t, d) = idf(t) · -------------------------------------
+                                           k1 + c_td + δ
         with
           c_td = tf_td / (1 – b + b · |d| / avgdl)
         where
@@ -202,8 +200,7 @@ class BM25LTransformer(BM25TransformerBase):
         rep: ndarray = np.repeat(dl, nnz_per_doc)
         # Calculate c_td
         ctd: ndarray = X.data / (1 - self.b + self.b * rep / self.avgdl)
-        # Apply BM25L formula - without multiplying by X.data again
-        data: ndarray = (self.k1 + 1) * (ctd + self.delta) / (self.k1 + ctd + self.delta)
+        data: ndarray = X.data * (self.k1 + 1) * (ctd + self.delta) / (self.k1 + ctd + self.delta)
         X = sp.csr_matrix((data, X.indices, X.indptr), shape=X.shape)
         if self.use_idf:
             X = X @ self._idf_diag
@@ -343,8 +340,16 @@ class BM25AdptTransformer(BM25TransformerBase):
         Compute information gain values G_r^q for different r values.
         Return G_1^q and a list of all G_r^q/G_1^q values for optimization.
         """  # noqa
-        # Compute df_r values for r=0 to max_r+1
-        df_values = [self._compute_df_r(X, r, df) for r in range(max_r + 2)]
+        dl = X.sum(axis=1).A1
+        avgdl = np.mean(dl)
+        nnz_per_doc = np.diff(X.indptr)
+        rep_dl = np.repeat(dl, nnz_per_doc)
+        ctd = X.data / (1 - self.b + self.b * rep_dl / avgdl)
+
+        df_values = [np.full(X.shape[1], X.shape[0]), df]
+        for r in range(2, max_r + 2):
+            mask = ctd >= r - 0.5
+            df_values.append(np.bincount(X.indices[mask], minlength=X.shape[1]))
 
         # Calculate G_r^q values
         g_values = []
@@ -419,6 +424,10 @@ class BM25AdptTransformer(BM25TransformerBase):
         # Optimize for term-specific k1 values
         self.k1_terms = self._optimize_k1(g_normalized)
         return self
+
+    @override
+    def fit_from_stats(self, df: ndarray, n_samples: int, doc_len: ndarray) -> Self:
+        raise NotImplementedError("BM25-adpt requires fitting on the full term-count matrix")
 
     @override
     def transform(self, X: csr_matrix, copy: bool = True) -> csr_matrix:
@@ -511,7 +520,7 @@ class BM25TTransformer(BM25TransformerBase):
             # Derivative of (k1/(k1-1))*log(k1)
             return np.log(k1) / (k1 - 1) - k1 * np.log(k1) / ((k1 - 1) ** 2) + 1 / (k1 - 1)
 
-    def _compute_term_specific_k1(self, X: csr_matrix, elite_sets: list[list[int]], df: ndarray) -> ndarray:
+    def _compute_term_specific_k1(self, X: csr_matrix, df: ndarray) -> ndarray:
         """
         Compute term-specific k1 values using the log-logistic method described in the paper.
         Use Newton-Raphson method to solve for k1'.
@@ -519,34 +528,21 @@ class BM25TTransformer(BM25TransformerBase):
         n_terms = X.shape[1]
         k1_terms = np.full(n_terms, self.k1)  # Initialize with default k1
 
-        # Compute document lengths
         dl = X.sum(axis=1).A1
+        norm = 1 - self.b + self.b * dl / self.avgdl
+        X_csc = X.tocsc()
 
         # For each term, solve for term-specific k1
         for term_idx in range(n_terms):
             if df[term_idx] == 0:  # Skip terms that don't appear in corpus
                 continue
 
-            # Get the elite set (documents containing this term)
-            elite_set = elite_sets[term_idx]
-            if not elite_set:  # Skip if elite set is empty
+            start, end = X_csc.indptr[term_idx], X_csc.indptr[term_idx + 1]
+            if start == end:
                 continue
 
-            # Compute log(c_td)+1 for all documents in elite set
-            log_ctd_sum = 0.0
-            for doc_idx in elite_set:
-                # Find term frequency in this document
-                start, end = X.indptr[doc_idx], X.indptr[doc_idx + 1]
-                term_pos = np.where(X.indices[start:end] == term_idx)[0]
-
-                if len(term_pos) > 0:  # Term found in document
-                    tf = X.data[start + term_pos[0]]
-                    # Compute c_td (normalized term frequency)
-                    c_td = tf / (1 - self.b + self.b * dl[doc_idx] / self.avgdl)
-                    log_ctd_sum += np.log(c_td + 1)
-
-            # Target value for optimization
-            target = log_ctd_sum / df[term_idx]
+            c_td = X_csc.data[start:end] / norm[X_csc.indices[start:end]]
+            target = np.log(c_td + 1).sum() / df[term_idx]
 
             # Newton-Raphson method to solve for k1'
             k1_current = self.k1  # Start with default k1
@@ -583,17 +579,13 @@ class BM25TTransformer(BM25TransformerBase):
         self._idf_diag = sp.diags(idf, offsets=0, format="csr")
         self.avgdl = X.sum(axis=1).A1.mean()
 
-        # Build elite sets (documents containing each term)
-        elite_sets = [[] for _ in range(X.shape[1])]
-        for doc_idx in range(X.shape[0]):
-            start, end = X.indptr[doc_idx], X.indptr[doc_idx + 1]
-            for j in range(start, end):
-                term_idx = X.indices[j]
-                elite_sets[term_idx].append(doc_idx)
-
         # Compute term-specific k1 values
-        self.k1_terms = self._compute_term_specific_k1(X, elite_sets, df)
+        self.k1_terms = self._compute_term_specific_k1(X, df)
         return self
+
+    @override
+    def fit_from_stats(self, df: ndarray, n_samples: int, doc_len: ndarray) -> Self:
+        raise NotImplementedError("BM25T requires fitting on the full term-count matrix")
 
     @override
     def transform(self, X: csr_matrix, copy: bool = True) -> csr_matrix:
@@ -743,6 +735,7 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
         delta: float = 1.0,
         epsilon: float = 0.25,
         log1p_idf: bool = False,
+        use_idf: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -752,18 +745,193 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
         self.delta: float = delta
         self.epsilon: float = epsilon
         self.log1p_idf: bool = log1p_idf
+        self.use_idf: bool = use_idf
         self._tfidf: BM25TransformerBase | None = None
+        self._df: ndarray | None = None
+        self._n_samples: int | None = None
+        self._doc_len: ndarray | None = None
+        self._count_matrix: csr_matrix | None = None
 
     def fit(self, raw_documents: list | np.ndarray, y: np.ndarray | None = None) -> Self:
-        X: csr_matrix = super().fit_transform(raw_documents)
-        self._tfidf = self.transformer_dispatch[self.transformer](
-            k1=self.k1, b=self.b, delta=self.delta, epsilon=self.epsilon, log1p_idf=self.log1p_idf
-        ).fit(X)
+        X: csr_matrix = CountVectorizer.fit_transform(self, raw_documents)
+        self._fit_count_matrix(X)
         return self
+
+    def _fit_count_matrix(self, X: csr_matrix) -> None:
+        self._df = np.bincount(X.indices, minlength=X.shape[1])
+        self._n_samples = X.shape[0]
+        self._doc_len = X.sum(axis=1).A1
+        self._count_matrix = X
+        self._tfidf = self.transformer_dispatch[self.transformer](
+            k1=self.k1,
+            b=self.b,
+            delta=self.delta,
+            epsilon=self.epsilon,
+            log1p_idf=self.log1p_idf,
+            use_idf=self.use_idf,
+        ).fit(X)
 
     def transform(self, raw_documents: list | np.ndarray) -> csr_matrix:
         check_is_fitted(self, "_tfidf")
-        return super().transform(raw_documents)
+        counts = CountVectorizer.transform(self, raw_documents)
+        return self._tfidf.transform(counts)
+
+    def fit_transform(self, raw_documents: list | np.ndarray, y: np.ndarray | None = None) -> csr_matrix:
+        X: csr_matrix = CountVectorizer.fit_transform(self, raw_documents)
+        self._fit_count_matrix(X)
+        return self._tfidf.transform(X)
+
+    def _get_weighting_transformer(self, transformer: str | None = None) -> BM25TransformerBase:
+        if transformer is None or transformer == self.transformer:
+            return self._tfidf
+
+        if self._df is None or self._n_samples is None or self._doc_len is None:
+            raise RuntimeError("fit() must be called before using an alternative transformer")
+
+        if transformer in {"bm25adpt", "bm25t"}:
+            if self._count_matrix is None:
+                raise RuntimeError(f"Alternative transformer '{transformer}' requires fitted corpus counts")
+            return self.transformer_dispatch[transformer](
+                k1=self.k1,
+                b=self.b,
+                delta=self.delta,
+                epsilon=self.epsilon,
+                log1p_idf=self.log1p_idf,
+                use_idf=self.use_idf,
+            ).fit(self._count_matrix)
+
+        return self.transformer_dispatch[transformer](
+            k1=self.k1,
+            b=self.b,
+            delta=self.delta,
+            epsilon=self.epsilon,
+            log1p_idf=self.log1p_idf,
+            use_idf=self.use_idf,
+        ).fit_from_stats(self._df, self._n_samples, self._doc_len)
+
+    def score(
+        self,
+        queries: str | Iterable[str] | sp.spmatrix,
+        documents: Iterable[str] | sp.spmatrix | None = None,
+        transformer: str | None = None,
+    ) -> ndarray:
+        """
+        Compute direct query-document retrieval scores.
+
+        Unlike cosine similarity over transformed sparse feature vectors, this
+        sums each query term's contribution against each document. For BM25+,
+        this includes the canonical delta contribution for query terms that are
+        absent from a document.
+        """
+        check_is_fitted(self, "_tfidf")
+
+        query_counts = self._count_documents(queries)
+        document_counts = self._get_document_counts(documents)
+
+        tf = self._get_weighting_transformer(transformer)
+        if isinstance(tf, BM25PlusTransformer):
+            return self._score_bm25plus(query_counts, document_counts, tf)
+
+        document_weights = tf.transform(document_counts)
+        return (query_counts @ document_weights.T).toarray()
+
+    def _count_documents(self, documents: str | Iterable[str] | sp.spmatrix) -> csr_matrix:
+        if sp.isspmatrix(documents):
+            return documents.tocsr(copy=False)
+        docs = [documents] if isinstance(documents, str) else list(documents)
+        return CountVectorizer.transform(self, docs)
+
+    def _get_document_counts(self, documents: Iterable[str] | sp.spmatrix | None = None) -> csr_matrix:
+        if documents is None:
+            if self._count_matrix is None:
+                raise RuntimeError("fit() must be called before scoring fitted documents")
+            return self._count_matrix
+        return self._count_documents(documents)
+
+    def _score_bm25plus(
+        self,
+        query_counts: csr_matrix,
+        document_counts: csr_matrix,
+        transformer: BM25PlusTransformer,
+    ) -> ndarray:
+        if query_counts.shape[1] != document_counts.shape[1]:
+            raise ValueError("query and document matrices must have the same number of features")
+
+        dl = document_counts.sum(axis=1).A1
+        nnz_per_doc = np.diff(document_counts.indptr)
+        rep = np.repeat(dl, nnz_per_doc)
+        data = (document_counts.data * (transformer.k1 + 1)) / (
+            transformer.k1 * (1 - transformer.b + transformer.b * rep / transformer.avgdl) + document_counts.data
+        )
+        component = sp.csr_matrix((data, document_counts.indices, document_counts.indptr), shape=document_counts.shape)
+
+        if transformer.use_idf:
+            idf = transformer._idf_diag.diagonal()
+            component = component @ transformer._idf_diag
+            baseline = query_counts @ (idf * transformer.delta)
+        else:
+            baseline = query_counts.sum(axis=1).A1 * transformer.delta
+
+        scores = (query_counts @ component.T).toarray()
+        return scores + np.asarray(baseline).reshape(-1, 1)
+
+    def rank(
+        self,
+        queries: str | Iterable[str] | sp.spmatrix,
+        documents: Iterable[str] | sp.spmatrix | None = None,
+        transformer: str | None = None,
+        top_n: int | None = None,
+        return_scores: bool = False,
+        batch_size: int = 4096,
+    ) -> ndarray | tuple[ndarray, ndarray]:
+        """
+        Rank documents for each query using direct retrieval scores.
+
+        Returns document indices sorted by descending score. If `return_scores`
+        is True, also returns the sorted scores with the same shape.
+        """
+        check_is_fitted(self, "_tfidf")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+
+        query_counts = self._count_documents(queries)
+        document_counts = self._get_document_counts(documents)
+        n_queries = query_counts.shape[0]
+        n_documents = document_counts.shape[0]
+        if top_n is None:
+            top_n = n_documents
+        if not 0 < top_n <= n_documents:
+            raise ValueError("top_n must be between 1 and the number of documents")
+
+        tf = self._get_weighting_transformer(transformer)
+        document_weights = None if isinstance(tf, BM25PlusTransformer) else tf.transform(document_counts)
+        ranked_batches = []
+        score_batches = []
+
+        for start in range(0, n_queries, batch_size):
+            end = min(start + batch_size, n_queries)
+            query_batch = query_counts[start:end]
+            if isinstance(tf, BM25PlusTransformer):
+                score_batch = self._score_bm25plus(query_batch, document_counts, tf)
+            else:
+                score_batch = (query_batch @ document_weights.T).toarray()
+
+            if top_n == n_documents:
+                ranked_batch = np.argsort(score_batch, axis=1)[:, ::-1]
+            else:
+                candidate_idx = np.argpartition(score_batch, -top_n, axis=1)[:, -top_n:]
+                candidate_scores = np.take_along_axis(score_batch, candidate_idx, axis=1)
+                order = np.argsort(candidate_scores, axis=1)[:, ::-1]
+                ranked_batch = np.take_along_axis(candidate_idx, order, axis=1)
+
+            ranked_batches.append(ranked_batch)
+            if return_scores:
+                score_batches.append(np.take_along_axis(score_batch, ranked_batch, axis=1))
+
+        ranked = np.vstack(ranked_batches)
+        if not return_scores:
+            return ranked
+        return ranked, np.vstack(score_batches)
 
     def _vectorize(
         self,
@@ -802,13 +970,7 @@ class BM25Vectorizer(TfidfVectorizer, SimilarityMixin):
         else:
             raise TypeError("item must be a raw document (str), an iterable[str], or a scipy sparse row-vector")
 
-        counts = super().transform(docs)
+        counts = CountVectorizer.transform(self, docs)
 
-        # If no weighting requested → return raw counts
-        if transformer is None or transformer == self.transformer:
-            tf = self._tfidf
-        else:  # use the alternative transformer lazily
-            tf = self.transformer_dispatch[transformer](
-                k1=self.k1, b=self.b, delta=self.delta, epsilon=self.epsilon, log1p_idf=self.log1p_idf
-            ).fit(counts)
+        tf = self._get_weighting_transformer(transformer)
         return tf.transform(counts)

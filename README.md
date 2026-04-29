@@ -77,6 +77,36 @@ ranked_indices = np.argsort(similarity.flatten())[::-1]
 print("Ranked documents:", ranked_indices)
 ```
 
+#### Direct Retrieval Scores
+
+Use `score()` when you want direct query-document BM25 scores rather than cosine
+similarity over sparse feature vectors:
+
+```python
+from bm25_vectorizer import BM25Vectorizer
+import numpy as np
+
+corpus = [
+    "the quick brown fox",
+    "the lazy dog",
+    "document retrieval system",
+]
+
+vectorizer = BM25Vectorizer(transformer="bm25plus").fit(corpus)
+scores = vectorizer.score(["quick fox"])
+ranked_indices = vectorizer.rank(["quick fox"])[0]
+print("Ranked documents:", ranked_indices)
+```
+
+`transform()` intentionally returns a sparse document-term feature matrix for
+scikit-learn interoperability. `score()` performs query-document scoring
+directly. For BM25+, this includes the canonical `delta * idf` contribution for
+query terms that are absent from a document, which cannot be represented exactly
+in a sparse feature matrix without materializing dense absent-term weights.
+`rank()` is a convenience wrapper around `score()` that returns descending
+document indices, optionally with sorted scores. It ranks queries in batches;
+lower `batch_size` to reduce peak memory on large query sets.
+
 #### Classes
 
 * BM25TransformerBase: Abstract base class for BM25 transformers.
