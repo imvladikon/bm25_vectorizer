@@ -1,9 +1,10 @@
 ## BM25 vectorizer
 
 BM25 Transformers and Vectorizer
-This Python package provides implementations of BM25, BM25L, BM25+, BM25-adpt, BM25T, and TF₁ₐₚ × IDF ranking functions
-as scikit-learn compatible transformers and a vectorizer. These are used for information retrieval and text processing,
-extending the traditional TF-IDF approach with document length normalization and term frequency saturation.
+This Python package provides implementations of BM25, BM25L (two variants), BM25+, BM25-adpt, BM25T, and TF₁ₐₚ × IDF
+ranking functions as scikit-learn compatible transformers and a vectorizer. These are used for information retrieval
+and text processing, extending the traditional TF-IDF approach with document length normalization and term frequency
+saturation.
 
 ### Installation
 
@@ -19,7 +20,7 @@ Similar to tf-idf from sklearn,
 BM25Vectorizer(transformer="bm25plus").fit(corpus)
 ```
 
-where `transformer` can be one of the following: `bm25l`, `bm25plus`, `bm25adpt`, `bm25t`, `tfidf1ap`
+where `transformer` can be one of the following: `bm25`, `bm25l`, `bm25l_canonical`, `bm25plus`, `bm25adpt`, `bm25t`, `tfidf1ap`
 
 #### Feature Extraction
 
@@ -77,11 +78,46 @@ ranked_indices = np.argsort(similarity.flatten())[::-1]
 print("Ranked documents:", ranked_indices)
 ```
 
+#### Direct Retrieval Scores
+
+Use `score()` when you want direct query-document BM25 scores rather than cosine
+similarity over sparse feature vectors:
+
+```python
+from bm25_vectorizer import BM25Vectorizer
+import numpy as np
+
+corpus = [
+    "the quick brown fox",
+    "the lazy dog",
+    "document retrieval system",
+]
+
+vectorizer = BM25Vectorizer(transformer="bm25plus").fit(corpus)
+scores = vectorizer.score(["quick fox"])
+ranked_indices = vectorizer.rank(["quick fox"])[0]
+print("Ranked documents:", ranked_indices)
+```
+
+`transform()` intentionally returns a sparse document-term feature matrix for
+scikit-learn interoperability. `score()` performs query-document scoring
+directly. For BM25+, this includes the canonical `delta * idf` contribution for
+query terms that are absent from a document, which cannot be represented exactly
+in a sparse feature matrix without materializing dense absent-term weights.
+`rank()` is a convenience wrapper around `score()` that returns descending
+document indices, optionally with sorted scores. It ranks queries in batches;
+lower `batch_size` to reduce peak memory on large query sets.
+
 #### Classes
 
 * BM25TransformerBase: Abstract base class for BM25 transformers.
 * BM25Transformer: Implements the standard BM25 scoring function.
-* BM25LTransformer: Implements BM25L, which adjusts for document length more aggressively.
+* BM25LTransformer: Implements BM25L in the `rank_bm25`-compatible form (carries an extra
+  `tf_td` multiplier outside the normalised-tf factor; deviates from the original Lv & Zhai 2011 paper).
+* BM25LCanonicalTransformer: Implements canonical BM25L from Lv & Zhai (2011), as reviewed by
+  Kamphuis et al. (ECIR 2020) and used by the `bm25s` library. No extra `tf_td` factor;
+  retrieval scoring (`score()` / `rank()`) includes the constant absent-term baseline
+  `idf · (k₁+1)·δ / (k₁+δ)` for query terms not present in a document.
 * BM25PlusTransformer: Implements BM25+, which adds a constant boost to scores.
 * BM25AdptTransformer: Implements BM25-adpt, using term-specific $k_1^t$ via information gain.
 * BM25TTransformer: Implements BM25T, using term-specific $k_1^t$ via log-logistic estimation.
@@ -107,10 +143,13 @@ Below are the formulas for the BM25 variants implemented in this package, provid
 * Standard BM25 IDF: $\text{idf}(t) = \log\left(\frac{N - n(t) + 0.5}{n(t) + 0.5}\right)$
 * Standard BM25
   Score: $\text{BM25}(t,d) = \text{IDF}(t) \cdot \frac{f(t,d) \cdot (k_1 + 1)}{f(t,d) + k_1 \cdot (1 - b + b \cdot \frac{|d|}{\text{avgdl}})}$
-* BM25L IDF: $\text{idf}(t) = \log\left(\frac{N + 1}{n(t) + 0.5}\right)$
-* BM25L
+* BM25L IDF (both variants): $\text{idf}(t) = \log\left(\frac{N + 1}{n(t) + 0.5}\right)$
+* BM25L (`bm25l`, rank_bm25-compatible)
   Score: $\text{BM25L}(t,d) = \text{IDF}(t) \cdot \frac{f(t,d) \cdot (k_1 + 1) \cdot (c(t,d) + \delta)}{k_1 + c(t,d) + \delta}$
   where $c(t,d) = \frac{f(t,d)}{1 - b + b \cdot \frac{|d|}{\text{avgdl}}}$
+* BM25L canonical (`bm25l_canonical`, Lv & Zhai 2011 / Kamphuis 2020 / `bm25s`)
+  Score: $\text{BM25L}(t,d) = \text{IDF}(t) \cdot \frac{(k_1 + 1) \cdot (c(t,d) + \delta)}{k_1 + c(t,d) + \delta}$ when $f(t,d) > 0$;
+  $\text{IDF}(t) \cdot \frac{(k_1 + 1) \cdot \delta}{k_1 + \delta}$ when $f(t,d) = 0$ (absent-term baseline, included by `score()` / `rank()`).
 
 * BM25+ IDF: $\text{idf}(t) = \log\left(\frac{N + 1}{n(t)}\right)$
 
@@ -154,7 +193,11 @@ Recent checks were run to verify practical retrieval behavior and formula consis
 - **Real retrieval test (Hugging Face `ag_news`, 1000 documents):**
   BM25-based retrieval produced `top-1 = 0.772` and `top-5 hit = 0.953` (random top-1 baseline: `0.278`).
 - **Reference agreement (`rank_bm25`)**:
-  For `bm25`, `bm25l`, `bm25plus`, rank correlation was `Spearman = 1.0` and `Kendall = 1.0` on shared corpora/queries.
+  For `bm25`, `bm25l`, `bm25plus`, scores match `rank_bm25` exactly on shared corpora/queries
+  (`np.allclose` over all queries; rank correlation = 1.0).
+- **Reference agreement (`bm25s`)**:
+  For `bm25l_canonical`, `score()` matches `bm25s` (`method="bm25l"`) exactly on shared
+  corpora/queries, including the absent-term baseline contribution.
 - **Oracle and invariants checks**:
   Expected ranking behavior (coverage, rare-term preference, length normalization) and core invariants (TF saturation, IDF ordering, `b=0` vs `b=1`) were confirmed.
 
@@ -166,7 +209,10 @@ For retrieval, compare documents by ranking/similarity (e.g., cosine over transf
 ## References
 
 - https://github.com/dorianbrown/rank_bm25
-
+- https://github.com/xhluca/bm25s
 - http://www.cs.otago.ac.nz/homepages/andrew/papers/2014-2.pdf
   "Improvements to BM25 and Language Models Examined", Trotman et al.
+- Lv & Zhai (CIKM 2011), "When Documents Are Very Long, BM25 Fails!" (BM25L).
+- Kamphuis, de Vries, Boytsov, Lin (ECIR 2020), "Which BM25 Do You Mean? A Large-Scale
+  Reproducibility Study of Scalable Retrieval Libraries".
 - https://nlp.stanford.edu/IR-book/html/htmledition/okapi-bm25-a-non-binary-model-1.html
